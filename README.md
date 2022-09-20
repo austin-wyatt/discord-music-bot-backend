@@ -6,6 +6,6 @@ Make sure you replace the apiKey variable in discord-init.js with your discord b
 
 # To build into a portable exe
 
-run "nexe server.js"
+run "nexe server.js" in the project directory
 
 copy the node modules folder into the directory with your exe (yes it's dumb, no I'm not going to put in any effort to fix it)
