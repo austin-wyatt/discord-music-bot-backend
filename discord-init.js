@@ -1,17 +1,27 @@
-const Discord = require('discord.js')
-const ytdl = require('ytdl-core')
+const yt_dl = require('youtube-dl-exec')
 var WebSocketServer = require('websocket').server;
 var http = require('http');
+const { Client, GatewayIntentBits } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
+const assert = require('assert');
 
-const client = new Discord.Client();
+const client = new Client({intents: [GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]});
 let connection = null;
-let globalDispatcher = null;
+
+const audioPlayer = createAudioPlayer();
 
 let apiKey = "<your api key here>";
 
+try{
+    assert(apiKey != "<your api key here>")    
+}
+catch{
+    console.error("Replace the value of apiKey with your Discord bot's API key")
+    process.exit(1)
+}
 exports.initialize = new Promise((resolve, reject) => {
     client.on('ready', () => {
-        console.log('Hello')
+        console.log('Discord connection successful')
     })
 
     client.on('message', (msg) => {
@@ -48,39 +58,30 @@ exports.initialize = new Promise((resolve, reject) => {
     })
 })
 
-exports.playYoutubeLink = (link) => new Promise((resolve, reject) => {
+exports.playYoutubeLink = (link) => new Promise(async (resolve, reject) => {
     if(initialized && connection){
         try{
-            const stream = ytdl('https://www.youtube.com/watch?v=' + link, { filter: 'audioonly',  quality: 'highestaudio' });
-
-            const dispatcher = connection.play(stream)
-            globalDispatcher = dispatcher
-            globalDispatcher.setVolumeDecibels(0.5)
-
-            let loop = true
-
-            let finishedPlaying = false;
-            dispatcher.on('finish', () => {
-                finishedPlaying = true;
-                console.log('Finished playing!');
-                dispatcher.destroy()
-            });
-
-            dispatcher.on('close', () => {
-                console.log('Stream closed');
-                dispatcher.destroy()
-                if(finishedPlaying){
-                    sendDataToClient('playback_ended')
+            // const stream = ytdl('https://www.youtube.com/watch?v=' + link, { filter: 'audioonly',  quality: 'highestaudio' });
+            const stream = yt_dl.exec('https://www.youtube.com/watch?v=' + link, {
+                output: '-',
+                format: 'bestaudio',
                 }
-            });
+                , { stdio: ['ignore', 'pipe', 'ignore'] })
 
-            dispatcher.on('error', () => {
-                console.log('Stream error encountered');
-                dispatcher.destroy()
+            const resource = createAudioResource(stream.stdout);
+            audioPlayer.play(resource);
+
+            audioPlayer.on(AudioPlayerStatus.Idle, () => {
+                console.log('Finished playing!');
                 sendDataToClient('playback_ended')
             });
 
-            console.log("Event names: " + stream.readableLength)
+            audioPlayer.on('error', (e) => {
+                console.log('Stream error encountered');
+                sendDataToClient('playback_ended')
+            });
+
+            console.log("Event names: " + stream.stdout.readableLength)
 
             resolve()
         }
@@ -96,30 +97,31 @@ exports.playYoutubeLink = (link) => new Promise((resolve, reject) => {
 exports.playMedia = (link) => new Promise((resolve, reject) => {
     if(initialized && connection){
         try{
-            const dispatcher = connection.play(link)
-            globalDispatcher = dispatcher
-            globalDispatcher.setVolumeDecibels(0.5)
+            const resource = createAudioResource(link);
+            audioPlayer.play(resource)
 
             let finishedPlaying = false;
-            dispatcher.on('finish', () => {
+            audioPlayer.on(AudioPlayerStatus.Idle, () => {
                 finishedPlaying = true;
                 console.log('Finished playing!');
-                dispatcher.destroy()
-            });
-
-            dispatcher.on('close', () => {
-                console.log('Stream closed');
-                dispatcher.destroy()
                 if(finishedPlaying){
                     sendDataToClient('playback_ended')
                 }
             });
 
-            dispatcher.on('error', () => {
+            // dispatcher.on('close', () => {
+            //     console.log('Stream closed');
+            //     dispatcher.destroy()
+            //     if(finishedPlaying){
+            //         sendDataToClient('playback_ended')
+            //     }
+            // });
+
+            audioPlayer.on('error', () => {
                 console.log('Stream error encountered');
-                dispatcher.destroy()
                 sendDataToClient('playback_ended')
             });
+
             resolve()
         }
         catch(error){
@@ -132,8 +134,8 @@ exports.playMedia = (link) => new Promise((resolve, reject) => {
 })
 
 exports.pause = () => new Promise((resolve, reject) => {
-    if(!!globalDispatcher){
-        globalDispatcher.pause();
+    if(audioPlayer){
+        audioPlayer.pause();
         resolve()
     }
     else{
@@ -142,8 +144,8 @@ exports.pause = () => new Promise((resolve, reject) => {
 })
 
 exports.play = () => new Promise((resolve, reject) => {
-    if(!!globalDispatcher){
-        globalDispatcher.resume();
+    if(audioPlayer){
+        audioPlayer.unpause();
         resolve()
     }
     else{
@@ -152,24 +154,12 @@ exports.play = () => new Promise((resolve, reject) => {
 })
 
 exports.setVolume = (volume) => new Promise((resolve, reject) => {
-    if(!!globalDispatcher){
-        globalDispatcher.setVolume(volume);
-        console.log('Setting volume')
-        resolve()
-    }
-    else{
-        reject()
-    }
+    resolve()
 })
 
 
 exports.getVolume = () => new Promise((resolve, reject) => {
-    if(!!globalDispatcher){
-        resolve(globalDispatcher.volume)
-    }
-    else{
-        reject()
-    }
+    resolve(1)
 })
 
 exports.getServers = (ids) => new Promise((resolve, reject) => {
@@ -181,7 +171,7 @@ exports.getServers = (ids) => new Promise((resolve, reject) => {
             returnValue.push({id: g.id, name: g.name, channels: []})
 
             g.channels.cache.map((c) => {
-                if(c.type == 'voice'){
+                if(c.type == 2){ //voice channel
                     returnValue[i].channels.push({id: c.id, name: c.name})
                 }
             })
@@ -204,16 +194,28 @@ exports.joinChannel = (guildID, channelID) => new Promise((resolve, reject) => {
         if(connection){
             connection.disconnect()
         }
-        const req = client.guilds.cache.get(guildID).channels.cache.get(channelID).join()
-        req.then(res => {
-            console.log('CONNECTION SUCCESFUL')
-            connection = res
-            resolve()
+
+        const channel = client.guilds.cache.get(guildID).channels.cache.get(channelID);
+        
+        connection = joinVoiceChannel({
+            channelId: channel.id,
+            guildId: channel.guild.id,
+            adapterCreator: channel.guild.voiceAdapterCreator,
+            selfDeaf: false,
+            selfMute: false
         })
-        req.catch(err => {
-            console.log('CONNECTION UNSUCCESFUL')
-            reject()
-        })
+
+        if(connection)
+        {
+            connection.subscribe(audioPlayer);
+            console.log('CHANNEL CONNECTION SUCCESSFUL')
+            resolve();
+        }
+        else
+        {
+            console.log('CHANNEL CONNECTION UNSUCCESSFUL')
+            reject();
+        }
     }
     else{
         reject()
